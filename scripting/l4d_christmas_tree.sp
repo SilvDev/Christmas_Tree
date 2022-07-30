@@ -1,6 +1,6 @@
 /*
 *	Christmas Tree
-*	Copyright (C) 2021 Silvers
+*	Copyright (C) 2022 Silvers
 *
 *	This program is free software: you can redistribute it and/or modify
 *	it under the terms of the GNU General Public License as published by
@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.7"
+#define PLUGIN_VERSION 		"1.8"
 
 /*======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.8 (30-Jul-2022)
+	- Changed cvar "l4d_tree_effects" to turn gifts smoke on or off. This may fix a random rare server crash. Thanks to "Hawkins" for reporting.
 
 1.7 (06-Dec-2021)
 	- L4D2: Added cvar "l4d_tree_melee" to control melee type spawn chance. Requested by "CaRmilla".
@@ -124,7 +127,7 @@ float g_fCvarBallRad, g_fCvarSpeed;
 int g_iCvarBallNum, g_iCvarBallCol, g_iCvarEffects, g_iCvarGifts, g_iCvarHealth, g_iCvarGlow, g_iCvarRainbow, g_iCvarRate, g_iTotalChance, g_iTotalChanceM, g_iPlayerSpawn, g_iRoundStart, g_iRoundNumber, g_iSpawnCount, g_iTreesCount, g_iSpawns[MAX_SPAWNS][4], g_iChances[MAX_ITEMS], g_iChanceMelee[MAX_MELEE];
 bool g_bCvarAllow, g_bMapStarted, g_bLeft4Dead2, g_bLoaded;
 char g_sCvarCGift[12], g_sCvarCTree[12];
-Handle sdkDissolveCreate;
+Handle g_hSDK_Dissolve;
 ArrayList g_aGifts;
 ArrayList g_aItems;
 ArrayList g_aSelected;
@@ -153,7 +156,8 @@ enum
 	EFFECTS_LIGHTS		= (1<<0),
 	EFFECTS_BALLS		= (1<<1),
 	EFFECTS_SPARKS		= (1<<2),
-	EFFECTS_DISSOLVE	= (1<<3)
+	EFFECTS_DISSOLVE	= (1<<3),
+	EFFECTS_SMOKE		= (1<<4)
 }
 
 // Ball colors: more reds and greens
@@ -284,8 +288,8 @@ public void OnPluginStart()
 				PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
 				PrepSDKCall_AddParameter(SDKType_Bool, SDKPass_Plain);
 				PrepSDKCall_SetReturnInfo(SDKType_CBaseEntity, SDKPass_Pointer);
-				sdkDissolveCreate = EndPrepSDKCall();
-				if( sdkDissolveCreate == null )
+				g_hSDK_Dissolve = EndPrepSDKCall();
+				if( g_hSDK_Dissolve == null )
 					LogError("Could not prep the \"CEntityDissolve_Create\" function.");
 			}
 			delete hGameConf;
@@ -304,7 +308,7 @@ public void OnPluginStart()
 	g_hCvarBallRad =	CreateConVar(	"l4d_tree_ball_radius",		"45.0",			"Distance from the tree base to display balls.", CVAR_FLAGS );
 	g_hCvarCGift =		CreateConVar(	"l4d_tree_col_gift",		"255 0 0",		"Gift color. 0=Off (default Gift color). Three values between 0-255 separated by spaces. RGB: Red Green Blue.", CVAR_FLAGS );
 	g_hCvarCTree =		CreateConVar(	"l4d_tree_col_tree",		"0 255 0",		"Tree color. 0=Off (default Tree color). Three values between 0-255 separated by spaces. RGB: Red Green Blue.", CVAR_FLAGS );
-	g_hCvarEffects =	CreateConVar(	"l4d_tree_effects",			"15",			"0=Off. 1=Lights, 2=Balls, 4=Sparks, 8=Dissolver, 15=All. Add numbers together.", CVAR_FLAGS );
+	g_hCvarEffects =	CreateConVar(	"l4d_tree_effects",			"31",			"0=Off. 1=Lights, 2=Balls, 4=Sparks, 8=Dissolver (gifts), 16=Smoke (gifts - may cause rare crash on servers), 31=All. Add numbers together.", CVAR_FLAGS );
 	g_hCvarGifts =		CreateConVar(	"l4d_tree_gifts",			"6",			"How many packages to spawn under the tree.", CVAR_FLAGS );
 	g_hCvarHealth =		CreateConVar(	"l4d_tree_health",			"1",			"0=Does not break or drop items. Health of gifts to break and drop items.", CVAR_FLAGS );
 	if( g_bLeft4Dead2 )
@@ -315,7 +319,7 @@ public void OnPluginStart()
 	}
 	else
 	{
-		g_hCvarItems =	CreateConVar(	"l4d_tree_items",			"0,100,25,25,0,40,0,0,0,2,2,2,5,5,5",											"Item chance - values must be comma separated: Adrenaline, Pills, Molotov, PipeBomb, VomitJar, First Aid, Defibrillator, Explosive Ammo, Incendiary Ammo, + Weapons (see plugin thread).", CVAR_FLAGS );
+		g_hCvarItems =	CreateConVar(	"l4d_tree_items",			"0,100,25,25,0,40,0,0,0,2,2,2,5,5,5",	"Item chance - values must be comma separated: Adrenaline, Pills, Molotov, PipeBomb, VomitJar, First Aid, Defibrillator, Explosive Ammo, Incendiary Ammo, + Weapons (see plugin thread).", CVAR_FLAGS );
 	}
 	g_hCvarRainbow =	CreateConVar(	"l4d_tree_rainbow",			"2",			"0=Off. 1=Gifts change color over time. 2=Trees change color over time. 3=Both.", CVAR_FLAGS );
 	g_hCvarRate =		CreateConVar(	"l4d_tree_rate",			"10",			"How fast the color changes when using rainbow option.", CVAR_FLAGS, true, 1.0, true, 255.0 );
@@ -469,12 +473,12 @@ public void OnConfigsExecuted()
 	IsAllowed();
 }
 
-public void ConVarChanged_Allow(Handle convar, const char[] oldValue, const char[] newValue)
+void ConVarChanged_Allow(Handle convar, const char[] oldValue, const char[] newValue)
 {
 	IsAllowed();
 }
 
-public void ConVarChanged_Weapon(Handle convar, const char[] oldValue, const char[] newValue)
+void ConVarChanged_Weapon(Handle convar, const char[] oldValue, const char[] newValue)
 {
 	GetWeaponCvars();
 }
@@ -496,7 +500,7 @@ void GetWeaponCvars()
 	}
 }
 
-public void ConVarChanged_Cvars(Handle convar, const char[] oldValue, const char[] newValue)
+void ConVarChanged_Cvars(Handle convar, const char[] oldValue, const char[] newValue)
 {
 	GetCvars();
 }
@@ -657,7 +661,7 @@ bool IsAllowedGameMode()
 	return true;
 }
 
-public void OnGamemode(const char[] output, int caller, int activator, float delay)
+void OnGamemode(const char[] output, int caller, int activator, float delay)
 {
 	if( strcmp(output, "OnCoop") == 0 )
 		g_iCurrentMode = 1;
@@ -674,26 +678,26 @@ public void OnGamemode(const char[] output, int caller, int activator, float del
 // ====================================================================================================
 //					EVENTS
 // ====================================================================================================
-public void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
+void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 {
 	ResetPlugin(false);
 }
 
-public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
+void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	if( g_iPlayerSpawn == 1 && g_iRoundStart == 0 )
 		CreateTimer(0.5, TimerStart, _, TIMER_FLAG_NO_MAPCHANGE);
 	g_iRoundStart = 1;
 }
 
-public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	if( g_iPlayerSpawn == 0 && g_iRoundStart == 1 )
 		CreateTimer(0.5, TimerStart, _, TIMER_FLAG_NO_MAPCHANGE);
 	g_iPlayerSpawn = 1;
 }
 
-public Action TimerStart(Handle timer)
+Action TimerStart(Handle timer)
 {
 	g_iRoundNumber++;
 	ResetPlugin();
@@ -798,7 +802,7 @@ void CreateSpawn(const float vOrigin[3], const float vAngles[3], int index = 0, 
 	if( iSpawnIndex == -1 )
 		return;
 
-	if( type != TYPE_GIFT && type != TYPE_TREE)
+	if( type != TYPE_GIFT && type != TYPE_TREE )
 		type = TYPE_GIFT;
 
 	float vPos[3], vAng[3];
@@ -1038,7 +1042,7 @@ void CreateSpawn(const float vOrigin[3], const float vAngles[3], int index = 0, 
 	g_iSpawnCount++;
 }
 
-public Action OnTakeDamage(int gift, int &attacker, int &inflictor, float &damage, int &damagetype)
+Action OnTakeDamage(int gift, int &attacker, int &inflictor, float &damage, int &damagetype)
 {
 	if( g_iCvarHealth != 1 )
 	{
@@ -1089,13 +1093,13 @@ public Action OnTakeDamage(int gift, int &attacker, int &inflictor, float &damag
 	// Dissolve
 	int hammer = GetEntProp(gift, Prop_Data, "m_iHammerID");
 
-	if( sdkDissolveCreate != null && g_iCvarEffects & EFFECTS_DISSOLVE )
+	if( g_hSDK_Dissolve != null && g_iCvarEffects & EFFECTS_DISSOLVE )
 	{
 		SetEntProp(gift, Prop_Send, "m_fEffects", 32); // EF_NODRAW (1<<5)
 
 		InputKill(gift, 1.0);
 
-		int dissolver = SDKCall(sdkDissolveCreate, gift, "", GetGameTime() + 2.0, 2, false);
+		int dissolver = SDKCall(g_hSDK_Dissolve, gift, "", GetGameTime() + 2.0, 2, false);
 		if( IsValidEntity(dissolver) )
 			SetEntPropFloat(dissolver, Prop_Send, "m_flFadeOutStart", 0.0); // Fixes broken particles
 	} else {
@@ -1121,16 +1125,19 @@ public Action OnTakeDamage(int gift, int &attacker, int &inflictor, float &damag
 
 
 	// Smoke
-	vPos[0] += 10;
-	vPos[2] += 40;
-	MakeSmokestack(vPos, "155 0 0");
+	if( g_iCvarEffects & EFFECTS_SMOKE )
+	{
+		vPos[0] += 10;
+		vPos[2] += 40;
+		MakeSmokestack(vPos, "155 0 0");
 
-	vPos[0] -= 15;
-	vPos[1] -= 15;
-	MakeSmokestack(vPos, "0 0 155");
+		vPos[0] -= 15;
+		vPos[1] -= 15;
+		MakeSmokestack(vPos, "0 0 155");
 
-	vPos[1] += 30;
-	MakeSmokestack(vPos, "155 0 50");
+		vPos[1] += 30;
+		MakeSmokestack(vPos, "155 0 50");
+	}
 
 
 
@@ -1240,7 +1247,7 @@ public Action OnTakeDamage(int gift, int &attacker, int &inflictor, float &damag
 	return Plugin_Continue;
 }
 
-public Action Timer_Rainbow(Handle timer, any entity)
+Action Timer_Rainbow(Handle timer, any entity)
 {
 	entity = EntRefToEntIndex(entity);
 	if( IsValidEntRef(entity) == false ) return Plugin_Stop;
@@ -1290,7 +1297,7 @@ void RainbowFun()
 // ====================================================================================================
 //					sm_tree_spawn
 // ====================================================================================================
-public Action CmdSpawnerTemp(int client, int args)
+Action CmdSpawnerTemp(int client, int args)
 {
 	if( !client )
 	{
@@ -1331,7 +1338,7 @@ public Action CmdSpawnerTemp(int client, int args)
 // ====================================================================================================
 //					sm_tree_save
 // ====================================================================================================
-public Action CmdSpawnerSave(int client, int args)
+Action CmdSpawnerSave(int client, int args)
 {
 	if( !client )
 	{
@@ -1436,7 +1443,7 @@ public Action CmdSpawnerSave(int client, int args)
 // ====================================================================================================
 //					sm_tree_del
 // ====================================================================================================
-public Action CmdSpawnerDel(int client, int args)
+Action CmdSpawnerDel(int client, int args)
 {
 	if( !g_bCvarAllow )
 	{
@@ -1570,7 +1577,7 @@ public Action CmdSpawnerDel(int client, int args)
 // ====================================================================================================
 //					sm_tree_clear
 // ====================================================================================================
-public Action CmdSpawnerClear(int client, int args)
+Action CmdSpawnerClear(int client, int args)
 {
 	if( !client )
 	{
@@ -1587,7 +1594,7 @@ public Action CmdSpawnerClear(int client, int args)
 // ====================================================================================================
 //					sm_tree_wipe
 // ====================================================================================================
-public Action CmdSpawnerWipe(int client, int args)
+Action CmdSpawnerWipe(int client, int args)
 {
 	if( !client )
 	{
@@ -1638,7 +1645,7 @@ public Action CmdSpawnerWipe(int client, int args)
 // ====================================================================================================
 //					sm_tree_reload
 // ====================================================================================================
-public Action CmdSpawnerReload(int client, int args)
+Action CmdSpawnerReload(int client, int args)
 {
 	if( !g_bCvarAllow )
 	{
@@ -1656,7 +1663,7 @@ public Action CmdSpawnerReload(int client, int args)
 // ====================================================================================================
 //					sm_tree_glow
 // ====================================================================================================
-public Action CmdSpawnerGlow(int client, int args)
+Action CmdSpawnerGlow(int client, int args)
 {
 	static bool glow;
 	glow = !glow;
@@ -1686,7 +1693,7 @@ void VendorGlow(int glow)
 // ====================================================================================================
 //					sm_tree_list
 // ====================================================================================================
-public Action CmdSpawnerList(int client, int args)
+Action CmdSpawnerList(int client, int args)
 {
 	float vPos[3];
 	int count;
@@ -1706,7 +1713,7 @@ public Action CmdSpawnerList(int client, int args)
 // ====================================================================================================
 //					sm_tree_tele
 // ====================================================================================================
-public Action CmdSpawnerTele(int client, int args)
+Action CmdSpawnerTele(int client, int args)
 {
 	if( args == 1 )
 	{
@@ -1733,7 +1740,7 @@ public Action CmdSpawnerTele(int client, int args)
 // ====================================================================================================
 //					MENU ANGLE
 // ====================================================================================================
-public Action CmdSpawnerAng(int client, int args)
+Action CmdSpawnerAng(int client, int args)
 {
 	ShowMenuAng(client);
 	return Plugin_Handled;
@@ -1745,7 +1752,7 @@ void ShowMenuAng(int client)
 	g_hMenuAng.Display(client, MENU_TIME_FOREVER);
 }
 
-public int AngMenuHandler(Menu menu, MenuAction action, int client, int index)
+int AngMenuHandler(Menu menu, MenuAction action, int client, int index)
 {
 	if( action == MenuAction_Select )
 	{
@@ -1799,7 +1806,7 @@ void SetAngle(int client, int index)
 // ====================================================================================================
 //					MENU ORIGIN
 // ====================================================================================================
-public Action CmdSpawnerPos(int client, int args)
+Action CmdSpawnerPos(int client, int args)
 {
 	ShowMenuPos(client);
 	return Plugin_Handled;
@@ -1811,7 +1818,7 @@ void ShowMenuPos(int client)
 	g_hMenuPos.Display(client, MENU_TIME_FOREVER);
 }
 
-public int PosMenuHandler(Menu menu, MenuAction action, int client, int index)
+int PosMenuHandler(Menu menu, MenuAction action, int client, int index)
 {
 	if( action == MenuAction_Select )
 	{
@@ -2134,7 +2141,7 @@ bool SetTeleportEndPoint(int client, float vPos[3], float vAng[3])
 	return true;
 }
 
-public bool _TraceFilter(int entity, int contentsMask)
+bool _TraceFilter(int entity, int contentsMask)
 {
 	return entity > MaxClients || !entity;
 }
@@ -2142,7 +2149,7 @@ public bool _TraceFilter(int entity, int contentsMask)
 // ====================================================================================================
 //					LIGHTS VECTORS
 // ====================================================================================================
-public Action Timer_DrawAngle(Handle timer, DataPack dPack)
+Action Timer_DrawAngle(Handle timer, DataPack dPack)
 {
 	dPack.Reset();
 	int entity = dPack.ReadCell();
@@ -2350,7 +2357,7 @@ void MakeSmokestack(const float vPos[3], const char[] sColor)
 	TeleportEntity(entity, vPos, NULL_VECTOR, NULL_VECTOR);
 	AcceptEntityInput(entity, "TurnOn");
 
-	SetVariantString("OnUser1 !self:TurnOff::0.6:0");
+	SetVariantString("OnUser1 !self:TurnOff::0.6:1");
 	AcceptEntityInput(entity, "AddOutput");
 	AcceptEntityInput(entity, "FireUser1");
 
